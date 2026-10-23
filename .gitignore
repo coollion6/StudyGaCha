@@ -1,0 +1,17 @@
+# 部署副本，由 index.html 复制而来
+deploy/
+
+# 临时预览图和脚本
+preview-*.png
+_*.png
+_*.bat
+_preview.html
+
+# 系统文件
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 依赖与日志
+node_modules/
+*.log
