@@ -810,6 +810,31 @@
         </div>
     </div>
 
+    <!-- 弹窗：添加到主屏幕 -->
+    <div class="modal" id="modal-install">
+        <div class="modal-content">
+            <h3>添加到主屏幕</h3>
+            <p style="font-size: 12px; color: var(--muted);">装到桌面后，打开就是全屏，没有地址栏。</p>
+            <ol class="guide-steps" id="install-steps"></ol>
+            <div style="display: flex; gap: 10px;">
+                <button id="btn-install-native" style="flex: 1; display: none;">调起系统安装</button>
+                <button id="btn-install-close" class="btn-secondary" style="flex: 1;">知道了</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 弹窗：打卡提醒 -->
+    <div class="modal" id="modal-remind">
+        <div class="modal-content">
+            <h3 id="remind-title">今天还没抽卡</h3>
+            <p id="remind-text" style="font-size: 13px; color: var(--muted); white-space: pre-line; line-height: 1.7;"></p>
+            <div style="display: flex; gap: 10px;">
+                <button id="btn-remind-go" style="flex: 1;">去抽卡</button>
+                <button id="btn-remind-later" class="btn-secondary" style="flex: 1;">稍后</button>
+            </div>
+        </div>
+    </div>
+
     <!-- 弹窗：自选任务 -->
     <div class="modal" id="modal-pick-task">
         <div class="modal-content">
@@ -898,6 +923,8 @@
             <button class="menu-item" id="nav-security">🔐 设置密保</button>
             <button class="menu-item" id="nav-quote">📝 管理语录</button>
             <button class="menu-item" id="nav-about">ℹ️ 关于与鸣谢</button>
+            <button class="menu-item" id="nav-install">📲 添加到主屏幕</button>
+            <button class="menu-item" id="nav-remind">🔔 每日提醒：开</button>
             <button class="menu-item" id="nav-theme">🌙 切换深色模式</button>
 
             <div class="menu-divider"></div>
@@ -969,6 +996,55 @@
             }
             return msg;
         }
+
+        // ===== 添加到主屏幕 =====
+        let deferredInstallPrompt = null;
+        window.addEventListener('beforeinstallprompt', (e) => {
+            e.preventDefault();
+            deferredInstallPrompt = e;
+            const btn = document.getElementById('btn-install-native');
+            const modal = document.getElementById('modal-install');
+            if (btn && modal && modal.style.display === 'flex') btn.style.display = 'block';
+        });
+
+        function isStandaloneApp() {
+            return window.matchMedia('(display-mode: standalone)').matches
+                || window.navigator.standalone === true;
+        }
+
+        function installStepsHtml(ua) {
+            if (/MicroMessenger/i.test(ua)) {
+                return '<li>微信内不能直接添加。</li>'
+                    + '<li>点右上角「…」→「在浏览器打开」。</li>'
+                    + '<li>再用 Safari / Chrome 按下面的步骤添加。</li>';
+            }
+            if (/iPhone|iPad|iPod/i.test(ua)) {
+                return '<li>确认当前是 <strong>Safari</strong> 打开的页面。</li>'
+                    + '<li>点底部中间的「分享」按钮。</li>'
+                    + '<li>在列表里找到「添加到主屏幕」。</li>'
+                    + '<li>点右上角「添加」。</li>';
+            }
+            if (/Android/i.test(ua)) {
+                return '<li>点浏览器右上角的「⋮」。</li>'
+                    + '<li>选择「安装应用」或「添加到主屏幕」。</li>'
+                    + '<li>没有这个选项的话，换 Chrome 再打开本页。</li>';
+            }
+            return '<li>看地址栏右侧有没有安装图标，有就点它。</li>'
+                + '<li>没有的话，点浏览器右上角菜单。</li>'
+                + '<li>Chrome 选「投放、保存和分享」→「安装页面」；Edge 选「应用」→「安装此站点为应用」。</li>';
+        }
+
+        function installApp() {
+            if (isStandaloneApp()) {
+                alert('现在已经是“像 App 一样”的独立窗口了，不需要再添加。');
+                return;
+            }
+            const ua = navigator.userAgent;
+            document.getElementById('install-steps').innerHTML = installStepsHtml(ua);
+            document.getElementById('btn-install-native').style.display = deferredInstallPrompt ? 'block' : 'none';
+            document.getElementById('modal-install').style.display = 'flex';
+        }
+
         let currentUser = null;
         let userProfile = null;
         let tasks = [];
@@ -1126,6 +1202,10 @@ const email = `${username}@example.com`;
             }
 
             userProfile = profile || { total_minutes: 0, total_coins: 0, streak: 0, username: '同学', custom_rewards: [], custom_quotes: [], redeem_history: [] };
+            // 旧资料行可能是 NULL 或字符串，统一成数字，避免 += 之后变成 NaN
+            userProfile.total_minutes = Number(userProfile.total_minutes) || 0;
+            userProfile.total_coins = Number(userProfile.total_coins) || 0;
+            userProfile.streak = Number(userProfile.streak) || 0;
                         // ===== 生日彩蛋 =====
             if (userProfile.birthday) {
                 const todayStr = localDateStr();
@@ -1161,6 +1241,7 @@ const email = `${username}@example.com`;
                 }, 1000);
             }
             updateUI();
+            setTimeout(maybeShowCheckinReminder, 900);
         }
 
         // 周六兜底：把本周一至周五没做完的金/红卡找出来
@@ -1218,6 +1299,26 @@ const email = `${username}@example.com`;
             document.getElementById('modal-finish-task').style.display = 'flex';
         };
 
+        // 统一用 upsert 保存资料：走 POST，避免部分代理/网络下 PATCH 被拦截后静默失败
+        async function saveProfile(patch) {
+            const payload = Object.assign({
+                id: currentUser.id,
+                username: (userProfile && userProfile.username) || ((currentUser.email || 'user').split('@')[0] || '同学')
+            }, patch);
+            const { data, error } = await _supabase.from('profiles')
+                .upsert(payload, { onConflict: 'id' })
+                .select('id,total_minutes,total_coins,streak');
+            if (error) {
+                console.error('保存资料失败：', error);
+                return error;
+            }
+            if (!data || data.length === 0) {
+                console.error('保存资料失败：没有写入任何行');
+                return { message: '没有写入资料行，请检查登录状态和 profiles 权限' };
+            }
+            return null;
+        }
+
         async function finishMakeUp(minutes) {
             const item = makeUpCards.find(x => x.recordDate === pendingFinish.recordDate && x.card.id === pendingFinish.cardId);
             if (!item) return;
@@ -1249,12 +1350,16 @@ const email = `${username}@example.com`;
             }
 
             const coins = card.coins || getCoins(card.rarity);
-            userProfile.total_minutes += minutes;
-            userProfile.total_coins += coins;
-            await _supabase.from('profiles').update({
+            userProfile.total_minutes = (Number(userProfile.total_minutes) || 0) + minutes;
+            userProfile.total_coins = (Number(userProfile.total_coins) || 0) + coins;
+            const saveErr = await saveProfile({
                 total_minutes: userProfile.total_minutes,
                 total_coins: userProfile.total_coins
-            }).eq('id', currentUser.id);
+            });
+            if (saveErr) {
+                await loadUserData();
+                return alert('补做已记录，但资料保存失败：' + saveErr.message + '\n请刷新后重试。');
+            }
 
             makeUpCards = makeUpCards.filter(x => x !== item);
             pendingFinish = null;
@@ -1868,7 +1973,7 @@ const email = `${username}@example.com`;
             await saveDailyRecord();
 
             // 更新用户的学币和总时长
-            userProfile.total_minutes += minutes;
+            userProfile.total_minutes = (Number(userProfile.total_minutes) || 0) + minutes;
                         // 计算连击天数
             const todayDate = localDateStr();
             if (userProfile.last_active_date !== todayDate) {
@@ -1881,15 +1986,20 @@ const email = `${username}@example.com`;
                 }
                 userProfile.last_active_date = todayDate;
             }
-            userProfile.total_coins += card.coins;
+            userProfile.total_coins = (Number(userProfile.total_coins) || 0) + (card.coins || 0);
             playSound('done');
 
-                   await _supabase.from('profiles').update({
-            total_minutes: userProfile.total_minutes,
-            total_coins: userProfile.total_coins,
-            streak: userProfile.streak,
-            last_active_date: userProfile.last_active_date
-        }).eq('id', currentUser.id);
+            const saveErr = await saveProfile({
+                total_minutes: userProfile.total_minutes,
+                total_coins: userProfile.total_coins,
+                streak: userProfile.streak,
+                last_active_date: userProfile.last_active_date
+            });
+            if (saveErr) {
+                document.getElementById('modal-finish-task').style.display = 'none';
+                await loadUserData();
+                return alert('打卡已记录，但学习时长保存失败：' + saveErr.message + '\n已重新同步，请再试一次。');
+            }
 
             document.getElementById('modal-finish-task').style.display = 'none';
             updateUI();
@@ -2430,6 +2540,117 @@ const email = `${username}@example.com`;
             document.getElementById('calendar-screen').style.display = 'none';
             document.getElementById('about-screen').style.display = 'flex';
             toggleMenu(false);
+        };
+
+        document.getElementById('nav-install').onclick = () => {
+            toggleMenu(false);
+            installApp();
+        };
+
+        document.getElementById('btn-install-close').onclick = () => {
+            document.getElementById('modal-install').style.display = 'none';
+        };
+
+        document.getElementById('btn-install-native').onclick = () => {
+            const promptEvent = deferredInstallPrompt;
+            if (!promptEvent) return;
+            deferredInstallPrompt = null;
+            document.getElementById('btn-install-native').style.display = 'none';
+            try {
+                promptEvent.prompt();
+            } catch (err) {
+                alert('系统没有弹出安装框。请按下面的步骤手动添加。');
+            }
+        };
+
+        // ===== 每日提醒 =====
+        // 不依赖系统通知：打开页面时，如果还没抽卡/还没打完，用弹窗提醒一次。
+        const REMIND_START_HOUR = 8;     // 早上 8 点后可以提醒“还没抽卡”
+        const REMIND_EVENING_HOUR = 19;  // 晚上 7 点后提醒“还没打卡”
+        let remindAction = null;
+
+        function remindEnabled() {
+            return localStorage.getItem('sg_remind_off') !== '1';
+        }
+
+        function refreshRemindMenu() {
+            const btn = document.getElementById('nav-remind');
+            if (btn) btn.innerText = remindEnabled() ? '🔔 每日提醒：开' : '🔕 每日提醒：关';
+        }
+
+        refreshRemindMenu();
+
+        document.getElementById('nav-remind').onclick = () => {
+            if (remindEnabled()) localStorage.setItem('sg_remind_off', '1');
+            else localStorage.removeItem('sg_remind_off');
+            refreshRemindMenu();
+        };
+
+        function closeRemind() {
+            document.getElementById('modal-remind').style.display = 'none';
+        }
+
+        function maybeShowCheckinReminder() {
+            if (!currentUser) return;
+            if (!remindEnabled()) return;
+            const now = new Date();
+            if (now.getDay() === 0) return; // 周日休息
+
+            const today = localDateStr();
+            if (localStorage.getItem('sg_remind_date') === today) return;
+            if (Number(localStorage.getItem('sg_remind_snooze') || 0) > Date.now()) return;
+
+            let title = '';
+            let text = '';
+            let btnText = '';
+
+            if (todayCards.length === 0) {
+                if (now.getHours() < REMIND_START_HOUR) return;
+                const hardCount = tasks.filter(t => t.type === '硬核').length;
+                const easyCount = tasks.filter(t => t.type === '轻松').length;
+                // 任务库不够时，页面上已有「先准备任务库」卡片，不再叠一个弹窗
+                if (hardCount < currentHardQuota || easyCount < currentEasyQuota) return;
+                title = '今天还没抽卡';
+                text = '抽三张，挑一张开始。抽完今天就不能换了。';
+                btnText = '去抽卡';
+                remindAction = () => {
+                    closeRemind();
+                    const drawBtn = document.getElementById('btn-draw');
+                    if (drawBtn) drawBtn.click();
+                };
+            } else {
+                const pending = todayCards.filter(c => !c.completed);
+                if (pending.length === 0) return;
+                if (now.getHours() < REMIND_EVENING_HOUR) return;
+                title = `还有 ${pending.length} 张卡没打卡`;
+                text = pending.map(c => `· ${c.name}（${c.rarity} · ${c.type}）`).join('\n');
+                btnText = '去打卡';
+                remindAction = () => {
+                    closeRemind();
+                    const firstPending = document.querySelector('#card-slots .gacha-card:not(.done-card)');
+                    if (firstPending) firstPending.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                };
+            }
+
+            localStorage.setItem('sg_remind_date', today);
+            document.getElementById('remind-title').innerText = title;
+            document.getElementById('remind-text').innerText = text;
+            document.getElementById('btn-remind-go').innerText = btnText;
+            document.getElementById('modal-remind').style.display = 'flex';
+        }
+
+        document.getElementById('btn-remind-go').onclick = () => {
+            localStorage.removeItem('sg_remind_snooze');
+            if (typeof remindAction === 'function') remindAction();
+            else closeRemind();
+        };
+
+        document.getElementById('btn-remind-later').onclick = () => {
+            // 稍后 = 2 小时后再提醒（当天仍有效）
+            // 去掉今天的“已提醒”标记，否则 snooze 到期后也会被日期挡住
+            localStorage.removeItem('sg_remind_date');
+            localStorage.setItem('sg_remind_snooze', String(Date.now() + 2 * 60 * 60 * 1000));
+            closeRemind();
         };
 
         document.getElementById('about-back').onclick = () => {
