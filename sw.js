@@ -1,5 +1,5 @@
 /* StudyGacha service worker：应用壳缓存，Supabase 请求永不缓存 */
-const CACHE = 'studygacha-v1';
+const CACHE = 'studygacha-v2';
 const ASSETS = [
   './',
   './index.html',
@@ -33,6 +33,9 @@ self.addEventListener('fetch', (event) => {
 
   // 只处理本站资源；Supabase / CDN 请求直接走网络
   if (url.origin !== self.location.origin) return;
+
+  // /sb/* 是 Supabase 反向代理，属于动态接口，绝不进缓存
+  if (url.pathname.indexOf('/sb/') === 0) return;
 
   // 页面导航：网络优先，失败时回退缓存，避免部署后看到旧页面
   if (req.mode === 'navigate') {

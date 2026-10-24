@@ -933,7 +933,10 @@
 
     <script>
         // ⚠️ 请在这里填入你刚才拿到的两串钥匙
-        const SUPABASE_URL = 'https://xotrojhguboknjxbsrye.supabase.co';
+        // 国内网络经常连不上 *.supabase.co；部署在 Netlify 时改走同域反向代理 /sb
+        const SUPABASE_URL = /\.netlify\.app$/.test(location.hostname)
+            ? location.origin + '/sb'
+            : 'https://xotrojhguboknjxbsrye.supabase.co';
         const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InhvdHJvamhndWJva25qeGJzcnllIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTIzOTUyNDAsImV4cCI6MjEwNzk3MTI0MH0.cK9S82-OjxhDz8oBwV7k0IYhkIuddJxLQ_i4cnrzqRk';
 
         // 密保功能需要先在 Supabase 跑配套 SQL；没跑就先把入口藏起来，避免点了报错
@@ -957,6 +960,15 @@
         }
 
         const _supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // 网络层错误统一换成能看懂的提示，避免只显示 Failed to fetch
+        function authErrorMessage(err) {
+            const msg = (err && err.message) ? err.message : String(err || '未知错误');
+            if (/failed to fetch|networkerror|load failed|fetch failed|fetch is not defined/i.test(msg)) {
+                return '连不上数据库：网络似乎被拦截了。请切换 Wi-Fi / 手机流量，或开代理后再试。';
+            }
+            return msg;
+        }
         let currentUser = null;
         let userProfile = null;
         let tasks = [];
@@ -1050,7 +1062,7 @@ const email = `${username}@example.com`;
             if (error) {
                 // 如果登录失败，尝试注册
                 const { data: signUpData, error: signUpError } = await _supabase.auth.signUp({ email, password });
-                if (signUpError) return alert('注册失败: ' + signUpError.message);
+                if (signUpError) return alert('注册失败: ' + authErrorMessage(signUpError));
 
                 // 注册成功后，创建用户资料
                 if (signUpData.user) {
